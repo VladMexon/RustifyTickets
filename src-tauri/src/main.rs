@@ -1,3 +1,7 @@
+// Скрывает лишнее окно консоли в релизной сборке Windows.
+// В debug-сборке консоль остаётся — туда пишутся логи и отладочный вывод.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! Tauri-команды GUI: загрузка файлов, конфиг категорий, отчёты.
 
 use rustifytickets::categories::CategoriesConfig;
