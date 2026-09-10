@@ -110,6 +110,9 @@ jobs:
         with:
           projectPath: src-tauri
           args: ${{ matrix.args }}
+          # четыре job'а матрицы создают один релиз параллельно — при гонке
+          # (release already exists / conflict) action повторит попытку
+          retryAttempts: 2
           tagName: ${{ github.ref_name }}
           releaseName: RustifyTickets ${{ github.ref_name }}
           releaseDraft: true
