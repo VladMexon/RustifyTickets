@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Разрешения для главного окна: диалоги, события, IPC",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}

@@ -1,0 +1,14 @@
+/target
+/.build
+ui/node_modules
+ui/dist
+src-tauri/target
+src-tauri/gen/schemas
+*.xlsx
+
+# Стандартный набор правил (вшивается в бинарь) — версионируется
+!categories.toml
+
+# Рабочий конфиг и пользовательский стандарт создаются при работе GUI
+src-tauri/categories.toml
+categories.default.toml

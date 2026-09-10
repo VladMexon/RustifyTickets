@@ -1,0 +1,22 @@
+[package]
+name = "RustifyTickets"
+version = "0.2.0"
+edition = "2024"
+
+[lib]
+name = "rustifytickets"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustifytickets"
+path = "src/main.rs"
+
+[dependencies]
+rust_xlsxwriter = "0.97.1"
+calamine = "0.36.1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+
+[profile.release]
+lto = true
+codegen-units = 1

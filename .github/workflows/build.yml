@@ -1,0 +1,124 @@
+name: Build
+
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Быстрая проверка: тесты ядра классификации (без GUI-зависимостей)
+  test:
+    name: Тесты ядра
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Кэш cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Тесты классификатора
+        run: cargo test --locked
+
+  # Сборка приложения под каждую ОС — на своей ОС (кросс-компиляция Tauri невозможна)
+  build:
+    name: Сборка (${{ matrix.label }})
+    needs: test
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            label: Linux (deb, rpm, AppImage)
+            args: ""
+          - platform: windows-latest
+            label: Windows (msi, exe)
+            args: ""
+          - platform: macos-latest
+            label: macOS (Apple Silicon)
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            label: macOS (Intel)
+            args: "--target x86_64-apple-darwin"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Системные зависимости (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2 \
+            build-essential \
+            curl wget file
+
+      - name: Установка Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Установка Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # для macOS нужны обе архитектуры, иначе цели не установятся
+          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Кэш cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Зависимости фронтенда
+        working-directory: ui
+        run: npm ci
+
+      - name: Сборка фронтенда
+        working-directory: ui
+        run: npm run build
+
+      # Пуш тега v1.2.3 — сборка + черновик релиза со всеми установщиками
+      - name: Сборка и черновик релиза (тег)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: src-tauri
+          args: ${{ matrix.args }}
+          uploadWorkflowArtifacts: true
+          tagName: ${{ github.ref_name }}
+          releaseName: RustifyTickets ${{ github.ref_name }}
+          releaseDraft: true
+          generateReleaseNotes: true
+
+      # Обычный push или pull request — только артефакты запуска
+      - name: Сборка (без релиза)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: src-tauri
+          args: ${{ matrix.args }}
+          uploadWorkflowArtifacts: true
