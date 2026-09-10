@@ -43,15 +43,19 @@ jobs:
         include:
           - platform: ubuntu-22.04
             label: Linux (deb, rpm, AppImage)
+            slug: linux
             args: ""
           - platform: windows-latest
             label: Windows (msi, exe)
+            slug: windows
             args: ""
           - platform: macos-latest
             label: macOS (Apple Silicon)
+            slug: macos-arm
             args: "--target aarch64-apple-darwin"
           - platform: macos-latest
             label: macOS (Intel)
+            slug: macos-intel
             args: "--target x86_64-apple-darwin"
 
     runs-on: ${{ matrix.platform }}
@@ -106,13 +110,12 @@ jobs:
         with:
           projectPath: src-tauri
           args: ${{ matrix.args }}
-          uploadWorkflowArtifacts: true
           tagName: ${{ github.ref_name }}
           releaseName: RustifyTickets ${{ github.ref_name }}
           releaseDraft: true
           generateReleaseNotes: true
 
-      # Обычный push или pull request — только артефакты запуска
+      # Обычный push или pull request — только сборка, без релиза
       - name: Сборка (без релиза)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: tauri-apps/tauri-action@v0
@@ -121,4 +124,26 @@ jobs:
         with:
           projectPath: src-tauri
           args: ${{ matrix.args }}
-          uploadWorkflowArtifacts: true
+
+      # Установщики выгружаются отдельным шагом: вход `uploadWorkflowArtifacts`
+      # появился только в tauri-action@v1, а этот способ не зависит от версии.
+      # Путь с `*/` покрывает сборку под конкретную архитектуру (macOS).
+      - name: Выгрузка установщиков
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustifyTickets-${{ matrix.slug }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/*/release/bundle/**/*.deb
+            src-tauri/target/*/release/bundle/**/*.rpm
+            src-tauri/target/*/release/bundle/**/*.AppImage
+            src-tauri/target/*/release/bundle/**/*.msi
+            src-tauri/target/*/release/bundle/**/*.exe
+            src-tauri/target/*/release/bundle/**/*.dmg
