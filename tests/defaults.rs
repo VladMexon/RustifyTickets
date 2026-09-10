@@ -108,3 +108,16 @@ fn embedded_defaults_match_working_config_if_present() {
         );
     }
 }
+
+/// Рабочий конфиг всегда называется `categories.toml` — от этого зависит
+/// и портативный режим (файл рядом с exe), и путь пользовательских настроек.
+#[test]
+fn config_path_points_to_categories_toml() {
+    let path = rustifytickets::default_config_path();
+    assert_eq!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("categories.toml"),
+        "неожиданное имя файла конфига: {}",
+        path.display()
+    );
+}

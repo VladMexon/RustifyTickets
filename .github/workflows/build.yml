@@ -131,6 +131,25 @@ jobs:
           projectPath: src-tauri
           args: ${{ matrix.args }}
 
+      # Portable-версия для Windows: тот же релизный exe, но без установки.
+      # Рядом с ним кладётся стандартный categories.toml — приложение найдёт
+      # его первым и будет хранить настройки в этой же папке.
+      - name: Portable-версия (Windows)
+        if: matrix.slug == 'windows'
+        shell: pwsh
+        run: Copy-Item src-tauri/target/release/rustifytickets-gui.exe RustifyTickets.exe
+
+      - name: Выгрузка portable-версии (Windows)
+        if: always() && matrix.slug == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustifyTickets-windows-portable
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            RustifyTickets.exe
+            categories.toml
+
       # Установщики выгружаются отдельным шагом: вход `uploadWorkflowArtifacts`
       # появился только в tauri-action@v1, а этот способ не зависит от версии.
       # Путь с `*/` покрывает сборку под конкретную архитектуру (macOS).

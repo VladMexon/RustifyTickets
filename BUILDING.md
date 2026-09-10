@@ -59,6 +59,30 @@ cd ../src-tauri && cargo tauri build --bundles deb,rpm
 **Кросс-компиляция невозможна**: Tauri линкуется с системным webview
 (WebKitGTK / WebView2 / WKWebView), поэтому сборка под каждую ОС идёт на своей ОС.
 
+## Портативная версия
+
+Установка не требуется — приложение запускается прямо из exe:
+
+- **Windows** — `RustifyTickets.exe` (тот же релизный бинарник, что и в установщике).
+  Требуется WebView2: в Windows 10 (с 2020 года) и Windows 11 он уже входит в систему
+- **Linux** — готовый `.AppImage` из `bundle/appimage/`, он портативный по своей природе
+- **macOS** — `RustifyTickets.app` из `bundle/macos/`, его достаточно перенести в любую папку
+
+Windows-сборка добавляет portable-версию автоматически: в CI выгружается отдельный
+артефакт `RustifyTickets-windows-portable` с двумя файлами — `RustifyTickets.exe`
+и стандартным `categories.toml`. Распакуйте их в одну папку и запускайте — настройки
+будут храниться рядом с exe, ничего в системе не создаётся.
+
+Правила поиска конфига при запуске:
+
+1. `categories.toml` рядом с exe — сюда попадают портативные сборки;
+2. `categories.toml` в текущей папке — запуск из репозитория;
+3. рядом с exe, если папка доступна для записи — portable остаётся самодостаточным,
+   даже если файл рядом удалили;
+4. пользовательская папка настроек — для установленных сборок, где каталог программы
+   защищён от записи: `%APPDATA%\RustifyTickets` (Windows) или
+   `~/.config/rustifytickets` (Linux/macOS).
+
 ## Автоматическая сборка на GitHub Actions
 
 Workflow `.github/workflows/build.yml` собирает приложение на всех трёх ОС:
@@ -72,6 +96,16 @@ Workflow `.github/workflows/build.yml` собирает приложение н�
   (вкладка **Actions** → нужный запуск → раздел **Artifacts**)
 - пуше тега вида `v1.2.3` — дополнительно создаётся **черновик релиза** со всеми установщиками
 - вручную через **Actions → Build → Run workflow**
+
+Артефакты запуска:
+
+| Артефакт | Содержимое |
+|---|---|
+| `RustifyTickets-linux` | `.deb`, `.rpm`, `.AppImage` |
+| `RustifyTickets-windows` | `.msi`, `-setup.exe` |
+| `RustifyTickets-windows-portable` | `RustifyTickets.exe` + `categories.toml` |
+| `RustifyTickets-macos-arm` | `.dmg` и `.app` для Apple Silicon |
+| `RustifyTickets-macos-intel` | `.dmg` и `.app` для Intel |
 
 Чтобы выпустить версию:
 

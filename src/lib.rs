@@ -164,23 +164,53 @@ pub fn save_report(
 /// Путь к рабочему конфигу категорий.
 ///
 /// Порядок поиска:
-/// 1. `categories.toml` рядом с исполняемым файлом — портативная установка;
+/// 1. `categories.toml` рядом с исполняемым файлом — портативная версия,
+///    в неё же кладётся стандартный набор при сборке;
 /// 2. `categories.toml` в текущей папке — удобно при запуске из репозитория;
-/// 3. пользовательская папка настроек — она доступна для записи и после
-///    установки в `Program Files` (Windows) или `/usr/bin` (Linux).
+/// 3. рядом с исполняемым файлом, если папка доступна для записи — так
+///    portable-версия остаётся самодостаточной, даже если файл удалили;
+/// 4. пользовательская папка настроек — для установленных сборок, где
+///    каталог программы защищён от записи (`Program Files`, `/usr/bin`).
 pub fn default_config_path() -> PathBuf {
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf))
-    {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+
+    if let Some(dir) = &exe_dir {
         let candidate = dir.join("categories.toml");
         if candidate.exists() {
             return candidate;
         }
     }
+
     let cwd_candidate = PathBuf::from("categories.toml");
     if cwd_candidate.exists() {
         return cwd_candidate;
     }
+
+    if let Some(dir) = &exe_dir {
+        if is_writable_dir(dir) {
+            return dir.join("categories.toml");
+        }
+    }
+
     user_config_dir().join("categories.toml")
+}
+
+/// Проверяет, можно ли создавать файлы в папке: проба создаётся и удаляется.
+fn is_writable_dir(dir: &Path) -> bool {
+    let probe = dir.join(format!(".rustifytickets-probe-{}", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Пользовательская папка настроек приложения.
@@ -217,4 +247,46 @@ pub fn write_config(path: &Path, contents: &str) -> Result<(), AppError> {
     }
     std::fs::write(path, contents)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_writable_directory() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert!(
+            is_writable_dir(&dir),
+            "папка проекта должна быть доступна для записи"
+        );
+    }
+
+    #[test]
+    fn writability_probe_leaves_no_files() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let _ = is_writable_dir(&dir);
+        let leftovers: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .expect("папка проекта должна читаться")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".rustifytickets-probe-")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "проба доступности записи не удалена: {leftovers:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_read_only_directory() {
+        // /proc существует, но создавать в нём файлы нельзя
+        assert!(!is_writable_dir(Path::new("/proc")));
+    }
 }
