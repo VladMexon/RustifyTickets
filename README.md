@@ -142,9 +142,10 @@ cd ui && npm run build && cd ..             # фронтенд
 cd src-tauri && cargo tauri build           # установщики под текущую ОС
 ```
 
-CI (`.github/workflows/build.yml`) собирает приложение на Linux, Windows и macOS,
-а по тегу вида `v0.2.0` создаёт черновик релиза. Все детали — в
-[BUILDING.md](BUILDING.md).
+CI (`.github/workflows/build.yml`) на каждый коммит и pull request прогоняет только
+тесты ядра. Полная сборка на Linux, Windows и macOS запускается по тегу вида `v0.3.0`
+(тогда же создаётся черновик релиза) или вручную — Actions → Build → Run workflow
+с флагом `build`. Подробности — в [BUILDING.md](BUILDING.md).
 
 ## Документация
 
