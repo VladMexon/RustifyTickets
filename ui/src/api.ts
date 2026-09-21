@@ -5,6 +5,13 @@ export interface FileSummary {
   source_name: string;
   total: number;
   category_count: Record<string, number>;
+  /** Колонка, из которой взяты даты заявок. */
+  date_column: string | null;
+  /** Границы периода в формате 2026-07-01. */
+  date_from: string | null;
+  date_to: string | null;
+  /** Сколько заявок имеют распознанную дату. */
+  dated_rows: number;
 }
 
 export interface CategoryRule {
@@ -32,7 +39,17 @@ export const classifyFiles = (paths: string[]): Promise<FileSummary[]> =>
 export const saveReportFile = (
   inputPath: string,
   outputPath: string,
-): Promise<string> => invoke("save_report_file", { inputPath, outputPath });
+  dateFrom: string,
+  dateTo: string,
+  groupBy: string,
+): Promise<string> =>
+  invoke("save_report_file", {
+    inputPath,
+    outputPath,
+    dateFrom,
+    dateTo,
+    groupBy,
+  });
 
 export const getCategories = (): Promise<CategoriesConfig> =>
   invoke("get_categories");
@@ -63,6 +80,9 @@ export interface DataPageResponse {
   total_pages: number;
   categories: string[];
   files: string[];
+  /** Сколько строк отсеяно из-за отсутствия даты при заданном периоде. */
+  rows_without_date: number;
+  date_column: string | null;
 }
 
 export const getClassifiedPage = (
@@ -71,6 +91,8 @@ export const getClassifiedPage = (
   pageSize: number,
   search: string,
   categoryFilter: string,
+  dateFrom: string,
+  dateTo: string,
 ): Promise<DataPageResponse> =>
   invoke("get_classified_page", {
     fileIndex,
@@ -78,4 +100,33 @@ export const getClassifiedPage = (
     pageSize,
     search,
     categoryFilter,
+    dateFrom,
+    dateTo,
   });
+
+export interface TimelinePoint {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface DatasetResponse {
+  file_name: string;
+  total_file: number;
+  total_filtered: number;
+  dated_rows: number;
+  date_column: string | null;
+  date_from: string | null;
+  date_to: string | null;
+  group_by: string;
+  category_count: Record<string, number>;
+  timeline: TimelinePoint[];
+}
+
+export const getDataset = (
+  fileIndex: number,
+  dateFrom: string,
+  dateTo: string,
+  groupBy: string,
+): Promise<DatasetResponse> =>
+  invoke("get_dataset", { fileIndex, dateFrom, dateTo, groupBy });

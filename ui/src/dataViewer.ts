@@ -1,20 +1,24 @@
 // Вкладка просмотра классифицированных данных с пагинацией и поиском.
 import { getClassifiedPage, type DataPageResponse } from "./api";
+import { getFileIndex, getPeriod, onPeriodChange } from "./filters";
 
-let currentFileIndex = 0;
 let currentPage = 1;
 let currentPageSize = 50;
 let currentSearch = "";
 let currentCategoryFilter = "";
 let debounceTimer: number | null = null;
-let knownFiles: string[] = [];
 // Какие столбцы скрыты пользователем (по имени заголовка)
 let hiddenColumns = new Set<string>();
 // Заголовки текущего файла — для панели фильтра столбцов
 let currentHeaders: string[] = [];
 
 export function initDataViewer() {
-  const fileSelect = document.getElementById("data-file-select") as HTMLSelectElement;
+  // Смена периода или файла в панели фильтра перезагружает таблицу
+  onPeriodChange(() => {
+    currentPage = 1;
+    void loadData();
+  });
+
   const searchInput = document.getElementById("data-search") as HTMLInputElement;
   const catFilter = document.getElementById("data-cat-filter") as HTMLSelectElement;
   const pageSizeSelect = document.getElementById("data-page-size") as HTMLSelectElement;
@@ -40,12 +44,6 @@ export function initDataViewer() {
     if (!t.closest(".col-filter-wrap")) {
       colFilterPanel.style.display = "none";
     }
-  });
-
-  fileSelect?.addEventListener("change", () => {
-    currentFileIndex = parseInt(fileSelect.value, 10) || 0;
-    currentPage = 1;
-    loadData();
   });
 
   searchInput?.addEventListener("input", () => {
@@ -146,7 +144,6 @@ async function loadData() {
   const container = document.getElementById("data-table-container");
   const countInfo = document.getElementById("data-count-info");
   const pageIndicator = document.getElementById("data-page-indicator");
-  const fileSelect = document.getElementById("data-file-select") as HTMLSelectElement;
   const catFilter = document.getElementById("data-cat-filter") as HTMLSelectElement;
 
   const firstBtn = document.getElementById("data-first-page") as HTMLButtonElement;
@@ -157,27 +154,16 @@ async function loadData() {
   if (!container) return;
 
   try {
+    const period = getPeriod();
     const res: DataPageResponse = await getClassifiedPage(
-      currentFileIndex,
+      getFileIndex(),
       currentPage,
       currentPageSize,
       currentSearch,
       currentCategoryFilter,
+      period.from,
+      period.to,
     );
-
-    // Обновляем список файлов, если изменился
-    if (fileSelect && JSON.stringify(res.files) !== JSON.stringify(knownFiles)) {
-      knownFiles = res.files;
-      fileSelect.innerHTML = "";
-      res.files.forEach((name, idx) => {
-        const opt = document.createElement("option");
-        opt.value = String(idx);
-        opt.textContent = `Файл: ${name}`;
-        opt.selected = idx === currentFileIndex;
-        fileSelect.appendChild(opt);
-      });
-      fileSelect.style.display = res.files.length > 0 ? "inline-block" : "none";
-    }
 
     // Метка на кнопке фильтра столбцов
     const colBtn = document.getElementById("data-col-filter-btn") as HTMLButtonElement | null;
@@ -221,7 +207,14 @@ async function loadData() {
     if (countInfo) {
       const start = res.total_filtered > 0 ? (res.page - 1) * res.page_size + 1 : 0;
       const end = Math.min(res.page * res.page_size, res.total_filtered);
-      countInfo.textContent = `Строки ${start}–${end} из ${res.total_filtered} (всего в файле: ${res.total_file})`;
+      const parts = [
+        `Строки ${start}–${end} из ${res.total_filtered}`,
+        `всего в файле: ${res.total_file}`,
+      ];
+      if ((period.from || period.to) && res.rows_without_date > 0) {
+        parts.push(`без даты: ${res.rows_without_date}`);
+      }
+      countInfo.textContent = parts.join(" · ");
     }
 
     if (pageIndicator) {

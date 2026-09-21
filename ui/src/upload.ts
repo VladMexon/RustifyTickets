@@ -8,6 +8,13 @@ import {
   saveReportFile,
   type FileSummary,
 } from "./api";
+import {
+  getDatasetSnapshot,
+  getPeriod,
+  refreshDataset,
+  setBounds,
+  setFileOptions,
+} from "./filters";
 
 export interface FileChosen {
   path: string;
@@ -22,7 +29,9 @@ let unlistenDragDrop: (() => void) | null = null;
 const listEl = () => document.getElementById("file-list") as HTMLUListElement;
 const statusEl = () => document.getElementById("upload-status") as HTMLDivElement;
 
-export function initUploadPanel(renderCharts: (s: FileSummary[]) => void) {
+export function initUploadPanel(
+  renderCharts: (dataset: import("./api").DatasetResponse | null) => void,
+) {
   const pickBtn = document.getElementById("pick-files") as HTMLButtonElement;
   const classifyBtn = document.getElementById("classify-btn") as HTMLButtonElement;
   const saveBtn = document.getElementById("save-report-btn") as HTMLButtonElement;
@@ -83,7 +92,12 @@ export function initUploadPanel(renderCharts: (s: FileSummary[]) => void) {
     try {
       lastSummaries = await classifyFiles(files.map((f) => f.path));
       setStatus(`Обработано файлов: ${lastSummaries.length}`, "ok");
-      renderCharts(lastSummaries);
+
+      // Границы периода берём из данных: по ним работают пресеты и поля ввода
+      setBounds(lastSummaries);
+      setFileOptions(lastSummaries.map((s) => s.source_name));
+      await refreshDataset();
+      renderCharts(getDatasetSnapshot());
     } catch (e) {
       setStatus(String(e), "error");
     } finally {
@@ -100,8 +114,9 @@ export function initUploadPanel(renderCharts: (s: FileSummary[]) => void) {
         filters: [{ name: "Excel", extensions: ["xlsx"] }],
       });
       if (!target) continue;
+      const period = getPeriod();
       try {
-        await saveReportFile(f.path, target);
+        await saveReportFile(f.path, target, period.from, period.to, period.groupBy);
         setStatus(`Отчёт сохранён: ${target}`, "ok");
       } catch (e) {
         setStatus(String(e), "error");

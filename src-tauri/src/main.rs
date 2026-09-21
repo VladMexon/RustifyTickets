@@ -5,7 +5,10 @@
 //! Tauri-команды GUI: загрузка файлов, конфиг категорий, отчёты.
 
 use rustifytickets::categories::CategoriesConfig;
-use rustifytickets::{classify_file, save_report, ClassificationResult};
+use rustifytickets::dates::{self, GroupBy};
+use rustifytickets::{
+    ClassificationResult, classify_file, filter_rows, period_counts, save_report_filtered,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,6 +48,38 @@ pub struct FileSummary {
     pub total: u32,
     /// Категория -> количество.
     pub category_count: HashMap<String, u32>,
+    /// Колонка, из которой взяты даты заявок.
+    pub date_column: Option<String>,
+    /// Границы периода в формате `2026-07-01`.
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    /// Сколько заявок имеют распознанную дату.
+    pub dated_rows: u32,
+}
+
+/// Точка динамики по периоду.
+#[derive(Serialize, Clone)]
+pub struct TimelinePoint {
+    pub key: String,
+    pub label: String,
+    pub count: u32,
+}
+
+/// Данные вкладки «Графики» с учётом отбора по датам.
+#[derive(Serialize)]
+pub struct DatasetResponse {
+    pub file_name: String,
+    pub total_file: u32,
+    pub total_filtered: u32,
+    pub dated_rows: u32,
+    pub date_column: Option<String>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub group_by: String,
+    /// Категория -> количество внутри отбора.
+    pub category_count: HashMap<String, u32>,
+    /// Динамика по месяцам или неделям.
+    pub timeline: Vec<TimelinePoint>,
 }
 
 /// Ответ для постраничного просмотра данных классификации.
@@ -60,6 +95,9 @@ pub struct DataPageResponse {
     pub total_pages: usize,
     pub categories: Vec<String>,
     pub files: Vec<String>,
+    /// Отбор по датам: сколько строк отсеяно из-за отсутствия даты.
+    pub rows_without_date: usize,
+    pub date_column: Option<String>,
 }
 
 /// Состояние на начало классификации (для прогресса).
@@ -139,6 +177,8 @@ async fn classify_files(
             let result = classify_file(path, &config).map_err(|e| e.to_string())?;
             let source_name = result.source_name.clone();
             let file_total = result.total();
+            let (date_from, date_to) = result.date_bounds();
+            let dated_rows = result.dates.iter().filter(|d| d.is_some()).count() as u32;
             let _ = window.emit(
                 "classify-progress",
                 ProgressEvent {
@@ -151,6 +191,10 @@ async fn classify_files(
                 source_name,
                 total: file_total,
                 category_count: result.category_count.clone(),
+                date_column: result.date_column.clone(),
+                date_from: date_from.map(|dt| dates::to_iso(dt.date())),
+                date_to: date_to.map(|dt| dates::to_iso(dt.date())),
+                dated_rows,
             });
             all_results.push(result);
         }
@@ -171,6 +215,8 @@ fn get_classified_page(
     page_size: usize,
     search: String,
     category_filter: String,
+    date_from: String,
+    date_to: String,
     state: State<'_, AppState>,
 ) -> Result<DataPageResponse, String> {
     let results = state.last_results.lock().map_err(|e| e.to_string())?;
@@ -186,6 +232,8 @@ fn get_classified_page(
             total_pages: 0,
             categories: Vec::new(),
             files: Vec::new(),
+            rows_without_date: 0,
+            date_column: None,
         });
     }
 
@@ -196,26 +244,39 @@ fn get_classified_page(
 
     let search_trimmed = search.trim().to_lowercase();
     let cat_filter_trimmed = category_filter.trim();
+    let date_filter = dates::filter_from_iso(&date_from, &date_to);
 
-    let filtered_rows: Vec<&(Vec<String>, String)> = result
-        .rows
-        .iter()
-        .filter(|(cells, cat)| {
-            if !cat_filter_trimmed.is_empty() && cat != cat_filter_trimmed {
-                return false;
+    let mut rows_without_date = 0usize;
+    let mut filtered_rows: Vec<&(Vec<String>, String)> = Vec::new();
+
+    for (index, row) in result.rows.iter().enumerate() {
+        let date = result.dates.get(index).copied().flatten();
+
+        // Отбор по периоду идёт первым: он же отсеивает строки без даты
+        if !date_filter.is_empty() {
+            if date.is_none() {
+                rows_without_date += 1;
             }
-            if !search_trimmed.is_empty() {
-                let in_cat = cat.to_lowercase().contains(&search_trimmed);
-                let in_cells = cells
-                    .iter()
-                    .any(|c| c.to_lowercase().contains(&search_trimmed));
-                if !in_cat && !in_cells {
-                    return false;
-                }
+            if !date_filter.accepts(date) {
+                continue;
             }
-            true
-        })
-        .collect();
+        }
+
+        let (cells, cat) = row;
+        if !cat_filter_trimmed.is_empty() && cat != cat_filter_trimmed {
+            continue;
+        }
+        if !search_trimmed.is_empty() {
+            let in_cat = cat.to_lowercase().contains(&search_trimmed);
+            let in_cells = cells
+                .iter()
+                .any(|c| c.to_lowercase().contains(&search_trimmed));
+            if !in_cat && !in_cells {
+                continue;
+            }
+        }
+        filtered_rows.push(row);
+    }
 
     let total_filtered = filtered_rows.len();
     let safe_page_size = page_size.max(1);
@@ -250,17 +311,82 @@ fn get_classified_page(
         total_pages,
         categories,
         files,
+        rows_without_date,
+        date_column: result.date_column.clone(),
+    })
+}
+
+/// Данные для графиков: категории и динамика по периодам с учётом отбора.
+#[tauri::command]
+fn get_dataset(
+    file_index: usize,
+    date_from: String,
+    date_to: String,
+    group_by: String,
+    state: State<'_, AppState>,
+) -> Result<DatasetResponse, String> {
+    let results = state.last_results.lock().map_err(|e| e.to_string())?;
+    if results.is_empty() {
+        return Ok(DatasetResponse {
+            file_name: String::new(),
+            total_file: 0,
+            total_filtered: 0,
+            dated_rows: 0,
+            date_column: None,
+            date_from: None,
+            date_to: None,
+            group_by,
+            category_count: HashMap::new(),
+            timeline: Vec::new(),
+        });
+    }
+
+    let idx = file_index.min(results.len().saturating_sub(1));
+    let result = &results[idx];
+    let filter = dates::filter_from_iso(&date_from, &date_to);
+    let group = GroupBy::from_str(&group_by);
+    let filtered = filter_rows(result, &filter);
+    let (bounds_from, bounds_to) = result.date_bounds();
+
+    Ok(DatasetResponse {
+        file_name: result.source_name.clone(),
+        total_file: result.total(),
+        total_filtered: filtered.rows.len() as u32,
+        dated_rows: result.dates.iter().filter(|d| d.is_some()).count() as u32,
+        date_column: result.date_column.clone(),
+        date_from: bounds_from.map(|dt| dates::to_iso(dt.date())),
+        date_to: bounds_to.map(|dt| dates::to_iso(dt.date())),
+        group_by: match group {
+            GroupBy::Month => "month".to_string(),
+            GroupBy::Week => "week".to_string(),
+        },
+        category_count: filtered.category_count.clone(),
+        timeline: period_counts(&filtered, group)
+            .into_iter()
+            .map(|point| TimelinePoint {
+                key: point.key,
+                label: point.label,
+                count: point.count,
+            })
+            .collect(),
     })
 }
 
 /// Сохраняет отчёт по одному файлу в выбранный xlsx (с диаграммами).
+///
+/// `date_from`/`date_to` задают период в формате `2026-07-01`; пустая строка —
+/// граница не ограничена. `group_by` — `month` или `week`.
 #[tauri::command]
 async fn save_report_file(
     input_path: String,
     output_path: String,
+    date_from: String,
+    date_to: String,
+    group_by: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let config = state.config.lock().map_err(|e| e.to_string())?.clone();
+    let group = GroupBy::from_str(&group_by);
     let cached_opt = {
         let guard = state.last_results.lock().map_err(|e| e.to_string())?;
         let p = Path::new(&input_path);
@@ -277,7 +403,9 @@ async fn save_report_file(
         } else {
             classify_file(Path::new(&input_path), &config).map_err(|e| e.to_string())?
         };
-        save_report(&result, Path::new(&output_path)).map_err(|e| e.to_string())?;
+        let filter = dates::filter_from_iso(&date_from, &date_to);
+        save_report_filtered(&result, Path::new(&output_path), &filter, group)
+            .map_err(|e| e.to_string())?;
         Ok(output_path)
     })
     .await
@@ -366,6 +494,7 @@ pub fn run() {
             reset_categories,
             set_default_categories,
             get_classified_page,
+            get_dataset,
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска Tauri");

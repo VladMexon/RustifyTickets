@@ -33,6 +33,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, count) in stats {
         println!("{name}: {count}");
     }
+
+    // Что удалось понять про даты: по ним в GUI строится отбор за период
+    match (&result.date_column, result.date_bounds()) {
+        (Some(column), (Some(from), Some(to))) => println!(
+            "\nДаты: колонка «{column}», период {} — {}",
+            from.format("%d.%m.%Y"),
+            to.format("%d.%m.%Y")
+        ),
+        (Some(column), _) => println!("\nДаты: колонка «{column}», значения не распознаны"),
+        (None, _) => println!("\nДаты: колонка с датой не найдена"),
+    }
+
     println!("\nГотово! Результат сохранен в: {}", output_path.display());
 
     Ok(())

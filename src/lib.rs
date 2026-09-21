@@ -3,9 +3,11 @@
 //! Используется и консольным приложением (`main.rs`), и Tauri-GUI.
 
 pub mod categories;
+pub mod dates;
 pub mod report;
 
 use calamine::Reader;
+use chrono::NaiveDateTime;
 use rust_xlsxwriter::{Format, Workbook, XlsxError};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,10 @@ pub struct ClassificationResult {
     pub headers: Vec<String>,
     /// Строки данных + присвоенная категория (последний элемент).
     pub rows: Vec<(Vec<String>, String)>,
+    /// Дата заявки по каждой строке (параллельно `rows`), если колонка найдена.
+    pub dates: Vec<Option<NaiveDateTime>>,
+    /// Имя колонки, из которой взяты даты.
+    pub date_column: Option<String>,
     /// Количество заявок по категориям.
     pub category_count: HashMap<String, u32>,
     /// Имя обработанного файла.
@@ -27,6 +33,22 @@ impl ClassificationResult {
     /// Общее число классифицированных строк.
     pub fn total(&self) -> u32 {
         self.rows.len() as u32
+    }
+
+    /// Границы доступного периода по распознанным датам.
+    pub fn date_bounds(&self) -> (Option<NaiveDateTime>, Option<NaiveDateTime>) {
+        let mut min: Option<NaiveDateTime> = None;
+        let mut max: Option<NaiveDateTime> = None;
+        for date in self.dates.iter().flatten() {
+            min = Some(min.map_or(*date, |m| m.min(*date)));
+            max = Some(max.map_or(*date, |m| m.max(*date)));
+        }
+        (min, max)
+    }
+
+    /// Есть ли в файле распознанные даты.
+    pub fn has_dates(&self) -> bool {
+        self.dates.iter().any(Option::is_some)
     }
 }
 
@@ -103,21 +125,38 @@ pub fn classify_file(
             ))
         })?;
 
+    // Правила готовятся один раз на файл: нормализация слов не зависит от строки
+    let matcher = config.matcher();
+
+    // Колонка с датой заявки: по ней потом фильтруется период
+    let date_idx = dates::find_date_column(&headers);
+    let date_column = date_idx.map(|i| headers[i].clone());
+
     let mut category_count: HashMap<String, u32> = HashMap::new();
     let mut data_rows: Vec<(Vec<String>, String)> = Vec::new();
+    let mut row_dates: Vec<Option<NaiveDateTime>> = Vec::with_capacity(range.height());
 
     for row in rows {
         let cells: Vec<String> = row.iter().map(|cell| cell.to_string()).collect();
         let description = cells.get(desc_idx).map(String::as_str).unwrap_or("");
-        let category = config.classify(description);
+        let category = matcher.classify(description).to_string();
 
-        *category_count.entry(category.to_string()).or_insert(0) += 1;
+        // Дату берём из исходной ячейки: числовые серии Excel в текст не годятся
+        row_dates.push(
+            date_idx
+                .and_then(|idx| row.get(idx))
+                .and_then(dates::parse_cell),
+        );
+
+        *category_count.entry(category.clone()).or_insert(0) += 1;
         data_rows.push((cells, category));
     }
 
     Ok(ClassificationResult {
         headers,
         rows: data_rows,
+        dates: row_dates,
+        date_column,
         category_count,
         source_name: path
             .file_name()
@@ -126,12 +165,83 @@ pub fn classify_file(
     })
 }
 
+/// Сводка по отфильтрованной части результата.
+pub struct FilteredRows<'a> {
+    /// Строки (исходные ячейки + категория) в порядке файла.
+    pub rows: Vec<&'a (Vec<String>, String)>,
+    /// Даты отобранных строк.
+    pub dates: Vec<Option<NaiveDateTime>>,
+    /// Количество заявок по категориям внутри отбора.
+    pub category_count: HashMap<String, u32>,
+}
+
+/// Точка динамики: сколько заявок пришлось на период.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PeriodCount {
+    /// Ключ периода для сортировки: `2026-07` или `2026-W27`.
+    pub key: String,
+    /// Подпись периода: `июль 2026` или `29.06–05.07.2026`.
+    pub label: String,
+    pub count: u32,
+}
+
+/// Отбирает строки результата по диапазону дат.
+pub fn filter_rows<'a>(
+    result: &'a ClassificationResult,
+    filter: &dates::DateFilter,
+) -> FilteredRows<'a> {
+    let mut rows = Vec::new();
+    let mut out_dates = Vec::new();
+    let mut category_count: HashMap<String, u32> = HashMap::new();
+
+    for (index, row) in result.rows.iter().enumerate() {
+        let date = result.dates.get(index).copied().flatten();
+        if !filter.accepts(date) {
+            continue;
+        }
+        *category_count.entry(row.1.clone()).or_insert(0) += 1;
+        rows.push(row);
+        out_dates.push(date);
+    }
+
+    FilteredRows {
+        rows,
+        dates: out_dates,
+        category_count,
+    }
+}
+
+/// Считает заявки по периодам внутри отбора, в хронологическом порядке.
+pub fn period_counts(filtered: &FilteredRows<'_>, group_by: dates::GroupBy) -> Vec<PeriodCount> {
+    // BTreeMap хранит ключи в хронологическом порядке
+    let mut buckets: std::collections::BTreeMap<String, PeriodCount> =
+        std::collections::BTreeMap::new();
+    for date in filtered.dates.iter().flatten() {
+        let key = group_by.key(*date);
+        buckets
+            .entry(key.clone())
+            .or_insert_with(|| PeriodCount {
+                key,
+                label: group_by.label(*date),
+                count: 0,
+            })
+            .count += 1;
+    }
+    buckets.into_values().collect()
+}
+
 /// Сохраняет результат в Excel: лист с данными + лист «Статистика»
 /// с таблицей и встроенными диаграммами.
-pub fn save_report(
+///
+/// `filter` ограничивает отчёт диапазоном дат: в книгу попадают только
+/// отобранные заявки, статистика и диаграммы считаются по ним же.
+pub fn save_report_filtered(
     result: &ClassificationResult,
     output_path: &Path,
+    filter: &dates::DateFilter,
+    group_by: dates::GroupBy,
 ) -> Result<(), AppError> {
+    let filtered = filter_rows(result, filter);
     let mut workbook = Workbook::new();
 
     // --- Лист с данными ---
@@ -146,19 +256,43 @@ pub fn save_report(
     sheet.write_with_format(0, category_col, "Категория", &header_fmt)?;
     sheet.autofit();
 
-    for (i, (cells, category)) in result.rows.iter().enumerate() {
+    // Колонки-даты пишутся человеку понятным текстом вместо серий Excel
+    let date_columns: Vec<usize> = result
+        .headers
+        .iter()
+        .enumerate()
+        .filter(|(_, header)| dates::looks_like_date_header(header))
+        .map(|(index, _)| index)
+        .collect();
+
+    for (i, row) in filtered.rows.iter().enumerate() {
         let row_idx = (i + 1) as u32;
-        for (col, cell) in cells.iter().enumerate() {
-            sheet.write_string(row_idx, col as u16, cell.as_str())?;
+        for (col, cell) in row.0.iter().enumerate() {
+            let value = if date_columns.contains(&col) {
+                dates::format_date_value(cell).unwrap_or_else(|| cell.clone())
+            } else {
+                cell.clone()
+            };
+            sheet.write_string(row_idx, col as u16, value.as_str())?;
         }
-        sheet.write_string(row_idx, category_col, category.as_str())?;
+        sheet.write_string(row_idx, category_col, row.1.as_str())?;
     }
     sheet.set_freeze_panes(1, 0)?;
 
-    report::add_statistics_sheet(&mut workbook, result)?;
+    report::add_statistics_sheet(&mut workbook, result, &filtered, filter, group_by)?;
 
     workbook.save(output_path)?;
     Ok(())
+}
+
+/// Сохраняет отчёт по всему файлу, без фильтра по датам.
+pub fn save_report(result: &ClassificationResult, output_path: &Path) -> Result<(), AppError> {
+    save_report_filtered(
+        result,
+        output_path,
+        &dates::DateFilter::default(),
+        dates::GroupBy::Month,
+    )
 }
 
 /// Путь к рабочему конфигу категорий.
@@ -198,8 +332,17 @@ pub fn default_config_path() -> PathBuf {
 }
 
 /// Проверяет, можно ли создавать файлы в папке: проба создаётся и удаляется.
+///
+/// Имя пробы уникально для каждого вызова, иначе одновременные проверки
+/// (например, из параллельных тестов) мешали бы друг другу.
 fn is_writable_dir(dir: &Path) -> bool {
-    let probe = dir.join(format!(".rustifytickets-probe-{}", std::process::id()));
+    static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let probe = dir.join(format!(
+        ".rustifytickets-probe-{}-{}",
+        std::process::id(),
+        seq
+    ));
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

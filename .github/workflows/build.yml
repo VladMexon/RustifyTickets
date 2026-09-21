@@ -184,3 +184,14 @@ jobs:
             src-tauri/target/*/release/bundle/**/*.msi
             src-tauri/target/*/release/bundle/**/*.exe
             src-tauri/target/*/release/bundle/**/*.dmg
+
+      # Portable exe прикладывается к релизу: tauri-action кладёт туда только
+      # установщики, и без этого шага портативная версия оставалась лишь
+      # артефактом запуска. Шаг идёт последним, чтобы падение выгрузки
+      # в релиз не отменяло уже собранные артефакты.
+      - name: Portable exe в релиз (Windows)
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.slug == 'windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" RustifyTickets.exe categories.toml --clobber

@@ -1,6 +1,7 @@
-// Графики на базе Chart.js: сводка по всем загруженным файлам.
+// Графики: распределение по категориям и динамика по месяцам или неделям.
 import Chart from "chart.js/auto";
-import type { FileSummary } from "./api";
+import type { DatasetResponse } from "./api";
+import { getPeriod } from "./filters";
 
 const PALETTE = [
   "#2e69ff", "#1f9d55", "#d64545", "#e6a817", "#8a4fd3",
@@ -10,41 +11,42 @@ const PALETTE = [
 
 let doughnutChart: Chart | null = null;
 let barChart: Chart | null = null;
+let timelineChart: Chart | null = null;
 
-export function renderCharts(summaries: FileSummary[]) {
-  if (summaries.length === 0) return;
+/** Перерисовывает вкладку «Графики» по текущему отбору. */
+export function renderCharts(dataset: DatasetResponse | null) {
+  const empty = document.getElementById("charts-empty") as HTMLDivElement | null;
+  const grid = document.getElementById("charts-grid") as HTMLDivElement | null;
 
-  // Агрегируем по категориям через все файлы
-  const totals = new Map<string, number>();
-  let grandTotal = 0;
-  for (const s of summaries) {
-    for (const [cat, count] of Object.entries(s.category_count)) {
-      totals.set(cat, (totals.get(cat) || 0) + count);
-      grandTotal += count;
-    }
+  if (!dataset || dataset.total_file === 0) {
+    if (empty) empty.style.display = "";
+    if (grid) grid.style.display = "none";
+    return;
   }
+  if (empty) empty.style.display = "none";
+  if (grid) grid.style.display = "";
 
-  // Сортировка по убыванию
-  const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
-  const labels = sorted.map(([cat]) => cat);
-  const values = sorted.map(([, v]) => v);
-  const colors = labels.map((_, i) => PALETTE[i % PALETTE.length]);
+  const sorted = Object.entries(dataset.category_count).sort((a, b) => b[1] - a[1]);
+  const labels = sorted.map(([name]) => name);
+  const values = sorted.map(([, count]) => count);
+  const colors = labels.map((_, index) => PALETTE[index % PALETTE.length]);
 
-  renderSummaryTable(summaries, sorted, grandTotal);
+  renderSummaryTable(sorted, dataset);
 
-  // --- Кольцевая: доли категорий ---
-  const doughnutCtx = (
-    document.getElementById("chart-doughnut") as HTMLCanvasElement
-  ).getContext("2d")!;
+  // --- Кольцевая: доли категорий в отобранном периоде ---
+  const doughnutCanvas = document.getElementById("chart-doughnut") as HTMLCanvasElement;
   doughnutChart?.destroy();
-  doughnutChart = new Chart(doughnutCtx, {
+  doughnutChart = new Chart(doughnutCanvas.getContext("2d")!, {
     type: "doughnut",
     data: { labels, datasets: [{ data: values, backgroundColor: colors }] },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        title: { display: true, text: "Распределение заявок по категориям" },
+        title: {
+          display: true,
+          text: `Распределение заявок по категориям (${dataset.total_filtered})`,
+        },
         legend: { position: "right" },
       },
     },
@@ -52,18 +54,16 @@ export function renderCharts(summaries: FileSummary[]) {
 
   // --- Гистограмма: топ-10 ---
   const top = sorted.slice(0, 10);
-  const barCtx = (
-    document.getElementById("chart-bar") as HTMLCanvasElement
-  ).getContext("2d")!;
+  const barCanvas = document.getElementById("chart-bar") as HTMLCanvasElement;
   barChart?.destroy();
-  barChart = new Chart(barCtx, {
+  barChart = new Chart(barCanvas.getContext("2d")!, {
     type: "bar",
     data: {
-      labels: top.map(([cat]) => cat),
+      labels: top.map(([name]) => name),
       datasets: [
         {
           label: "Заявок",
-          data: top.map(([, v]) => v),
+          data: top.map(([, count]) => count),
           backgroundColor: colors.slice(0, top.length),
         },
       ],
@@ -79,101 +79,88 @@ export function renderCharts(summaries: FileSummary[]) {
       scales: { x: { beginAtZero: true } },
     },
   });
+
+  // --- Динамика по периодам ---
+  const { groupBy } = getPeriod();
+  const timelineCanvas = document.getElementById("chart-timeline") as HTMLCanvasElement;
+  timelineChart?.destroy();
+  timelineChart = new Chart(timelineCanvas.getContext("2d")!, {
+    type: groupBy === "week" ? "bar" : "line",
+    data: {
+      labels: dataset.timeline.map((point) => point.label),
+      datasets: [
+        {
+          label: "Заявок за период",
+          data: dataset.timeline.map((point) => point.count),
+          backgroundColor: "#2e69ff",
+          borderColor: "#2e69ff",
+          borderWidth: 2,
+          fill: false,
+          tension: 0.25,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        title: {
+          display: true,
+          text:
+            groupBy === "week"
+              ? "Динамика заявок по неделям"
+              : "Динамика заявок по месяцам",
+        },
+        legend: { display: false },
+      },
+      scales: { y: { beginAtZero: true } },
+    },
+  });
 }
 
-function renderSummaryTable(
-  summaries: FileSummary[],
-  sorted: [string, number][],
-  grandTotal: number,
-) {
-  const wrap = document.getElementById("summary-table-wrap")!;
+function renderSummaryTable(sorted: [string, number][], dataset: DatasetResponse) {
+  const wrap = document.getElementById("summary-table-wrap");
+  if (!wrap) return;
   wrap.innerHTML = "";
+
   const table = document.createElement("table");
   table.className = "summary-table";
 
-  const isMultiFile = summaries.length > 1;
-
-  // Заголовок таблицы
   const header = table.insertRow();
-  const thCat = document.createElement("th");
-  thCat.textContent = "Категория";
-  header.appendChild(thCat);
-
-  if (isMultiFile) {
-    for (const s of summaries) {
-      const th = document.createElement("th");
-      th.className = "num";
-      th.textContent = s.source_name;
-      th.title = `${s.source_name} (всего заявок: ${s.total})`;
-      header.appendChild(th);
-    }
+  for (const [index, text] of ["Категория", "Количество", "Доля"].entries()) {
+    const th = document.createElement("th");
+    th.textContent = text;
+    if (index > 0) th.className = "num";
+    header.appendChild(th);
   }
 
-  const thTotal = document.createElement("th");
-  thTotal.className = "num";
-  thTotal.textContent = isMultiFile ? "Итого" : "Количество";
-  header.appendChild(thTotal);
-
-  const thPct = document.createElement("th");
-  thPct.className = "num";
-  thPct.textContent = "Доля";
-  header.appendChild(thPct);
-
-  // Строки категорий
-  for (const [cat, count] of sorted) {
+  const total = dataset.total_filtered || 1;
+  for (const [name, count] of sorted) {
     const row = table.insertRow();
 
-    // Название категории
-    const catCell = row.insertCell();
-    catCell.textContent = cat;
-    if (cat === "Не классифицировано") {
-      catCell.className = "unclassified-cell";
-    }
+    const nameCell = row.insertCell();
+    nameCell.textContent = name;
+    if (name === "Не классифицировано") nameCell.className = "unclassified-cell";
 
-    // Если несколько файлов - выводим разбивку по каждому файлу
-    if (isMultiFile) {
-      for (const s of summaries) {
-        const fileCell = row.insertCell();
-        fileCell.className = "num";
-        const val = s.category_count[cat] || 0;
-        fileCell.textContent = val > 0 ? String(val) : "0";
-      }
-    }
-
-    // Итоговое количество по категории
     const countCell = row.insertCell();
     countCell.className = "num font-semibold";
     countCell.textContent = String(count);
 
-    // Доля в процентах
-    const pct = row.insertCell();
-    pct.className = "num";
-    const percent = grandTotal > 0 ? (count / grandTotal) * 100 : 0;
-    pct.textContent = `${percent.toFixed(1)}%`;
+    const pctCell = row.insertCell();
+    pctCell.className = "num";
+    pctCell.textContent = `${((count / total) * 100).toFixed(1)}%`;
   }
 
-  // Итоговая строка
   const totalRow = table.insertRow();
   totalRow.className = "summary-total-row";
-
-  const totalCat = totalRow.insertCell();
-  totalCat.textContent = "Всего заявок";
-
-  if (isMultiFile) {
-    for (const s of summaries) {
-      const fileTotal = totalRow.insertCell();
-      fileTotal.className = "num font-semibold";
-      fileTotal.textContent = String(s.total);
-    }
-  }
-
-  const grandCell = totalRow.insertCell();
-  grandCell.className = "num font-semibold";
-  grandCell.textContent = String(grandTotal);
-
-  const pctTotal = totalRow.insertCell();
-  pctTotal.className = "num font-semibold";
-  pctTotal.textContent = "100.0%";
+  const label = totalRow.insertCell();
+  label.textContent = "Всего за период";
+  const sum = totalRow.insertCell();
+  sum.className = "num font-semibold";
+  sum.textContent = String(dataset.total_filtered);
+  const pct = totalRow.insertCell();
+  pct.className = "num font-semibold";
+  pct.textContent = "100.0%";
 
   wrap.appendChild(table);
 }

@@ -4,9 +4,10 @@ version = 4
 
 [[package]]
 name = "RustifyTickets"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "calamine",
+ "chrono",
  "rust_xlsxwriter",
  "serde",
  "toml 0.9.12+spec-1.1.0",
@@ -2680,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "rustifytickets-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "RustifyTickets",
  "serde",

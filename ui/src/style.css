@@ -174,7 +174,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
 }
 .chart-box { position: relative; height: 380px; }
-.chart-box.wide { grid-column: 1 / -1; height: auto; max-height: 520px; overflow: auto; }
+.chart-box.wide { grid-column: 1 / -1; height: 380px; }
+/* Таблица не рисуется на canvas: ей нужна собственная высота и прокрутка */
+#summary-table-wrap { height: auto; max-height: 520px; overflow: auto; }
 .chart-box canvas { max-width: 100%; }
 
 .summary-table { width: 100%; border-collapse: collapse; table-layout: auto; margin-top: 8px; }
@@ -279,3 +281,25 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 .panel { display: none; }
 .panel.active { display: block; }
+
+/* --- Панель периода --- */
+.filter-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 14px; margin-bottom: 16px;
+}
+.filter-bar .filter-label { font-size: 13px; color: var(--muted); }
+.filter-bar input[type="date"],
+.filter-bar select {
+  font: inherit; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: #fff;
+}
+.filter-bar input[type="date"]:focus,
+.filter-bar select:focus { outline: none; border-color: var(--accent); }
+.filter-bar input[type="date"]:disabled { background: #f4f6f9; color: var(--muted); }
+.filter-sep { color: var(--muted); }
+.filter-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+.filter-presets button { padding: 5px 10px; font-size: 12.5px; white-space: nowrap; }
+.filter-presets button:disabled { opacity: 0.5; cursor: not-allowed; }
+.filter-presets button:disabled:hover { background: var(--panel); }
+.filter-group { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.filter-info { margin-left: auto; font-size: 12.5px; color: var(--muted); }

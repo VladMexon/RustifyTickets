@@ -2,6 +2,11 @@
 import { initUploadPanel } from "./upload";
 import { initEditor } from "./editor";
 import { initDataViewer, refreshDataViewer } from "./dataViewer";
+import {
+  getDatasetSnapshot,
+  initFilters,
+  onPeriodChange,
+} from "./filters";
 
 import "./style.css";
 
@@ -15,6 +20,28 @@ app.innerHTML = `
     <button class="tab" data-tab="data">Данные</button>
     <button class="tab" data-tab="charts">Графики</button>
     <button class="tab" data-tab="editor">Категории</button>
+  </div>
+
+  <div class="filter-bar card" id="filter-bar" style="display:none">
+    <span class="filter-label">Период по «Время создания»:</span>
+    <input type="date" id="date-from" title="Начало периода" />
+    <span class="filter-sep">—</span>
+    <input type="date" id="date-to" title="Конец периода" />
+    <div class="filter-presets">
+      <button data-preset="all">Весь период</button>
+      <button data-preset="last-month">Последний месяц</button>
+      <button data-preset="prev-month">Предыдущий месяц</button>
+      <button data-preset="last-7">7 дней</button>
+      <button data-preset="last-30">30 дней</button>
+    </div>
+    <label class="filter-group">Группировка
+      <select id="group-by">
+        <option value="month">по месяцам</option>
+        <option value="week">по неделям</option>
+      </select>
+    </label>
+    <select id="filter-file" title="Файл" style="display:none"></select>
+    <span class="filter-info" id="filter-info"></span>
   </div>
 
   <div class="panel active" id="panel-upload">
@@ -41,7 +68,6 @@ app.innerHTML = `
     <div class="card">
       <h2>Классифицированные данные</h2>
       <div class="data-toolbar">
-        <select id="data-file-select" style="display:none"></select>
         <input class="search-box inline" id="data-search" placeholder="Поиск по тексту заявки..." />
         <select id="data-cat-filter">
           <option value="">Все категории</option>
@@ -75,10 +101,14 @@ app.innerHTML = `
 
   <div class="panel" id="panel-charts">
     <div class="card">
-      <h2>Графики по загруженным файлам</h2>
-      <div class="charts-grid">
+      <h2>Графики за выбранный период</h2>
+      <div class="empty-placeholder" id="charts-empty">
+        Файлы ещё не классифицированы. Перейдите на вкладку «Файлы и отчёт» и нажмите «Классифицировать».
+      </div>
+      <div class="charts-grid" id="charts-grid" style="display:none">
         <div class="chart-box"><canvas id="chart-doughnut"></canvas></div>
         <div class="chart-box"><canvas id="chart-bar"></canvas></div>
+        <div class="chart-box wide"><canvas id="chart-timeline"></canvas></div>
         <div class="chart-box wide" id="summary-table-wrap"></div>
       </div>
     </div>
@@ -99,9 +129,12 @@ app.innerHTML = `
       <p class="editor-note">
         Заявка относится к категории с наибольшей <b>суммой весов</b> совпавших слов
         (вес по умолчанию — 1 за слово). При равенстве весов побеждает категория
-        с меньшим <b>приоритетом</b>. Сопоставление — по подстроке без учёта регистра;
-        пишите корень слова без окончания («газоанализ» покроет «газоанализатор» и
-        «газоанализаторы»). Слова-исключения запрещают категорию для заявки.
+        с меньшим <b>приоритетом</b>. Сопоставление — по подстроке; пишите корень
+        слова без окончания («газоанализ» покроет «газоанализатор» и
+        «газоанализаторы»). <b>Регистр и вид дефиса не важны</b>: слово «Wi-Fi»
+        найдёт «wi-fi», «wi–fi» и «wi fi», а английские слова работают наравне с
+        русскими. Слитное написание — отдельное слово: «wifi» не совпадёт с «wi-fi».
+        Слова-исключения запрещают категорию для заявки.
         Кнопка <b>«Сделать стандартными»</b> запоминает текущий набор правил как
         эталон: именно его вернёт <b>«Сбросить к стандартным»</b>.
       </p>
@@ -120,18 +153,23 @@ for (const tab of Array.from(document.querySelectorAll(".tab"))) {
     tab.classList.add("active");
     const panel = document.getElementById(`panel-${(tab as HTMLElement).dataset.tab}`);
     panel?.classList.add("active");
-    // Данные и графики перезагружаем при входе на вкладку
+    // Таблица перезагружается при входе на вкладку: нужны свежие данные
     if ((tab as HTMLElement).dataset.tab === "data") {
-      refreshDataViewer();
+      void refreshDataViewer();
     }
   });
 }
 
-initUploadPanel(async (summaries) => {
+initUploadPanel(async (dataset) => {
   const { renderCharts } = await import("./charts");
-  renderCharts(summaries);
-  // Сразу обновляем просмотр данных после классификации
-  await refreshDataViewer();
+  renderCharts(dataset);
 });
 initEditor();
 initDataViewer();
+
+// Панель периода общая для таблицы, графиков и отчёта
+initFilters();
+onPeriodChange(async () => {
+  const { renderCharts } = await import("./charts");
+  renderCharts(getDatasetSnapshot());
+});
